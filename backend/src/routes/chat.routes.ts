@@ -1,11 +1,13 @@
 import { Router } from 'express'
 import { buildChatSystemPrompt } from '../agent/synthesise.js'
 import { appendMessages, getSession } from '../db/supabase.js'
+import { createLogger } from '../lib/logger.js'
 import { streamLLM } from '../lib/llm.js'
 import { DEFAULT_MODELS } from '../lib/utils.js'
 import type { Provider } from '../types/index.js'
 
 export const chatRouter = Router()
+const log = createLogger('api.chat')
 
 chatRouter.post('/message', async (req, res) => {
   const sessionId = String(req.body.sessionId ?? '')
@@ -18,6 +20,13 @@ chatRouter.post('/message', async (req, res) => {
     res.status(400).json({ error: 'sessionId, userMessage, provider, model, and session header required' })
     return
   }
+
+  log.info('chat message', {
+    sessionId,
+    provider,
+    model,
+    messageLength: userMessage.length,
+  })
 
   const session = await getSession(sessionId, userSessionId)
   const systemPrompt = buildChatSystemPrompt(session.analysisResult)
@@ -48,7 +57,9 @@ chatRouter.post('/message', async (req, res) => {
       { role: 'assistant', content: assembled, provider },
     ])
   } catch (err) {
-    res.write(`data: ${JSON.stringify({ error: String(err) })}\n\n`)
+    const message = err instanceof Error ? err.message : String(err)
+    log.error('chat stream failed', { sessionId, error: message })
+    res.write(`data: ${JSON.stringify({ error: message })}\n\n`)
   } finally {
     res.end()
   }

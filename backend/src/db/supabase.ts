@@ -1,11 +1,14 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { buildInitialAssistantMessage } from '../agent/synthesise.js'
+import { createLogger } from '../lib/logger.js'
 import type {
   AnalysisResult,
   Message,
   Provider,
   Session,
 } from '../types/index.js'
-import { buildInitialAssistantMessage } from '../agent/synthesise.js'
+
+const log = createLogger('db')
 
 interface SessionRow {
   id: string
@@ -204,6 +207,7 @@ export async function deleteSession(sessionId: string, userSessionId: string): P
     if (!row || row.user_session_id !== userSessionId) throw new Error('Session not found')
     memory.sessions.delete(sessionId)
     memory.messages.delete(sessionId)
+    log.info('session deleted (mock db)', { sessionId })
     return
   }
 
@@ -215,6 +219,7 @@ export async function deleteSession(sessionId: string, userSessionId: string): P
     .eq('user_session_id', userSessionId)
 
   if (error) throw error
+  log.info('session deleted (supabase)', { sessionId })
 }
 
 export async function appendMessages(
@@ -257,6 +262,7 @@ export async function appendMessages(
     .update({ updated_at: new Date().toISOString() })
     .eq('id', sessionId)
     .eq('user_session_id', userSessionId)
+
 }
 
 export async function updateSessionReport(

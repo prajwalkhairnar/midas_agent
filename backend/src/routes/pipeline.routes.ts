@@ -1,15 +1,15 @@
 import { Router } from 'express'
 import { runPipeline } from '../agent/orchestrator.js'
+import { createLogger } from '../lib/logger.js'
 import { DEFAULT_MODELS, getConfiguredProviders } from '../lib/utils.js'
 import type { Provider, SSEEvent } from '../types/index.js'
 
 export const pipelineRouter = Router()
+const log = createLogger('api.pipeline')
 
 pipelineRouter.get('/providers', (_req, res) => {
   const providers = getConfiguredProviders()
-  const models = Object.fromEntries(
-    providers.map((p) => [p, DEFAULT_MODELS[p] ?? '']),
-  )
+  const models = Object.fromEntries(providers.map((p) => [p, DEFAULT_MODELS[p] ?? '']))
   res.json({ providers, models })
 })
 
@@ -34,9 +34,12 @@ pipelineRouter.post('/run', async (req, res) => {
 
   const configured = getConfiguredProviders()
   if (!configured.includes(provider) && process.env.USE_MOCK_LLM !== 'true') {
+    log.warn('pipeline rejected: provider not configured', { provider, configured })
     res.status(400).json({ error: 'Provider not configured' })
     return
   }
+
+  log.info('pipeline run requested', { ticker, provider, model, userSessionId })
 
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache')
@@ -50,7 +53,9 @@ pipelineRouter.post('/run', async (req, res) => {
   try {
     await runPipeline({ ticker, provider, model, userSessionId, emit })
   } catch (err) {
-    emit({ step: 'complete', status: 'error', detail: String(err) })
+    const message = err instanceof Error ? err.message : String(err)
+    log.error('pipeline run failed', { ticker, provider, error: message })
+    emit({ step: 'complete', status: 'error', detail: message })
   } finally {
     res.end()
   }

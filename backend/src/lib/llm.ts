@@ -1,6 +1,9 @@
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
+import { createLogger } from './logger.js'
 import type { Provider } from '../types/index.js'
+
+const log = createLogger('llm')
 
 export interface LLMCallConfig {
   provider: Provider
@@ -27,6 +30,9 @@ function useMockLLM(): boolean {
 }
 
 export async function callLLM(config: LLMCallConfig): Promise<string> {
+  const step = inferStepLabel(config.systemPrompt)
+  const start = Date.now()
+
   if (useMockLLM()) {
     return mockLLMResponse(config)
   }
@@ -54,7 +60,14 @@ export async function callLLM(config: LLMCallConfig): Promise<string> {
     })
     const block = response.content[0]
     if (block.type !== 'text') throw new Error('Unexpected response type from Anthropic')
-    return block.text
+    const text = block.text
+    log.info('llm call completed', {
+      step,
+      provider,
+      durationMs: Date.now() - start,
+      chars: text.length,
+    })
+    return text
   }
 
   const baseURLMap: Record<string, string> = {
@@ -85,10 +98,29 @@ export async function callLLM(config: LLMCallConfig): Promise<string> {
     ],
   })
 
-  return response.choices[0]?.message?.content ?? ''
+  const text = response.choices[0]?.message?.content ?? ''
+  log.info('llm call completed', {
+    step,
+    provider,
+    durationMs: Date.now() - start,
+    responseChars: text.length,
+  })
+  return text
+}
+
+function inferStepLabel(systemPrompt: string): string {
+  const s = systemPrompt.toLowerCase()
+  if (s.includes('extracting structured')) return 'extract'
+  if (s.includes('forensic linguist')) return 'tone'
+  if (s.includes('short-seller')) return 'redflags'
+  if (s.includes('post-earnings note')) return 'synthesis'
+  if (s.includes('equity research report')) return 'report'
+  if (s.includes('senior equity analyst')) return 'chat'
+  return 'unknown'
 }
 
 export async function* streamLLM(config: StreamLLMConfig): AsyncGenerator<string> {
+  const start = Date.now()
   if (useMockLLM()) {
     const text = mockLLMResponse({
       provider: config.provider,
@@ -115,11 +147,14 @@ export async function* streamLLM(config: StreamLLMConfig): AsyncGenerator<string
       system: systemPrompt,
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
     })
+    let chars = 0
     for await (const event of stream) {
       if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+        chars += event.delta.text.length
         yield event.delta.text
       }
     }
+    log.info('llm stream completed', { provider, durationMs: Date.now() - start, responseChars: chars })
     return
   }
 
@@ -143,10 +178,15 @@ export async function* streamLLM(config: StreamLLMConfig): AsyncGenerator<string
     messages: [{ role: 'system', content: systemPrompt }, ...messages],
   })
 
+  let chars = 0
   for await (const chunk of stream) {
     const delta = chunk.choices[0]?.delta?.content
-    if (delta) yield delta
+    if (delta) {
+      chars += delta.length
+      yield delta
+    }
   }
+  log.info('llm stream completed', { provider, durationMs: Date.now() - start, responseChars: chars })
 }
 
 function mockLLMResponse(config: LLMCallConfig): string {
@@ -186,15 +226,17 @@ function mockLLMResponse(config: LLMCallConfig): string {
     })
   }
   if (system.includes('short-seller')) {
-    return JSON.stringify([
-      {
-        text: 'Guidance range widened while headline beat was emphasized',
-        type: 'hedged_language',
-        severity: 'medium',
-        evidence: 'we remain thoughtful about the environment',
-        charOffset: 450,
-      },
-    ])
+    return JSON.stringify({
+      redFlags: [
+        {
+          text: 'Guidance range widened while headline beat was emphasized',
+          type: 'hedged_language',
+          severity: 'medium',
+          evidence: 'we remain thoughtful about the environment',
+          charOffset: 450,
+        },
+      ],
+    })
   }
   if (system.includes('equity research report')) {
     return `# AAPL — Q4 2024 Earnings Analysis\n\n## Executive Summary\nMock report for testing.\n`
